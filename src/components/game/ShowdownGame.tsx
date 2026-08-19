@@ -1,5 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Scissors, Hand, Mountain, Volume2, VolumeX, RotateCcw, Trophy } from "lucide-react";
+import {
+  Scissors,
+  Hand,
+  Mountain,
+  Volume2,
+  VolumeX,
+  RotateCcw,
+  Trophy,
+  Users,
+  Smartphone,
+  Loader2,
+  Copy,
+  Check,
+} from "lucide-react";
 
 import {
   resumeAudio,
@@ -12,9 +25,18 @@ import {
   sfxDraw,
   sfxChampion,
 } from "@/lib/saloon-audio";
-
-type Choice = "scissors" | "paper" | "stone";
-type Player = 1 | 2;
+import {
+  beats,
+  createRoom,
+  fetchRoom,
+  joinRoom,
+  patchRoom,
+  subscribeRoom,
+  type Choice,
+  type Player,
+  type Room,
+  type RoundLog,
+} from "@/lib/online-room";
 
 const CHOICES: Choice[] = ["scissors", "paper", "stone"];
 const TOTAL_ROUNDS = 7;
@@ -40,33 +62,95 @@ function WhatsAppIcon({ className }: { className?: string }) {
   );
 }
 
-function beats(a: Choice, b: Choice) {
-  return (
-    (a === "scissors" && b === "paper") ||
-    (a === "paper" && b === "stone") ||
-    (a === "stone" && b === "scissors")
-  );
+type Mode = "local" | "online";
+
+type Snapshot = {
+  round: number;
+  first: Player;
+  turn: Player;
+  locked: Partial<Record<Player, Choice>>;
+  scores: { 1: number; 2: number };
+  log: RoundLog[];
+  phase: "waiting" | "playing" | "reveal" | "over";
+};
+
+const EMPTY: Snapshot = {
+  round: 1,
+  first: 1,
+  turn: 1,
+  locked: {},
+  scores: { 1: 0, 2: 0 },
+  log: [],
+  phase: "playing",
+};
+
+function roomToSnapshot(room: Room): Snapshot {
+  const locked: Partial<Record<Player, Choice>> = {};
+  if (room.p1_choice) locked[1] = room.p1_choice;
+  if (room.p2_choice) locked[2] = room.p2_choice;
+  return {
+    round: room.round,
+    first: room.first_player as Player,
+    turn: room.turn as Player,
+    locked,
+    scores: { 1: room.score1, 2: room.score2 },
+    log: room.log ?? [],
+    phase: room.phase,
+  };
 }
 
-type RoundLog = { round: number; p1: Choice; p2: Choice; winner: Player | 0 };
-
 export function ShowdownGame() {
-  const [round, setRound] = useState(1);
-  const [first, setFirst] = useState<Player>(1);
-  const [turn, setTurn] = useState<Player>(1);
-  const [locked, setLocked] = useState<Partial<Record<Player, Choice>>>({});
+  const [mode, setMode] = useState<Mode | null>(null);
+  const [me, setMe] = useState<Player>(1);
+  const [room, setRoom] = useState<Room | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [lobbyError, setLobbyError] = useState<string | null>(null);
+  const [joinCode, setJoinCode] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const [local, setLocal] = useState<Snapshot>(EMPTY);
   const [flash, setFlash] = useState<Choice>("scissors");
-  const [scores, setScores] = useState({ 1: 0, 2: 0 });
-  const [log, setLog] = useState<RoundLog[]>([]);
-  const [resultText, setResultText] = useState("Round 1 — Player 1 draws first. Hit STOP!");
-  const [phase, setPhase] = useState<"playing" | "reveal" | "over">("playing");
   const [muted, setMutedState] = useState(false);
   const [started, setStarted] = useState(false);
   const [shake, setShake] = useState(false);
+  const [resultText, setResultText] = useState("Round 1 — Player 1 draws first. Hit STOP!");
 
   const flashIndex = useRef(0);
+  const lastLoggedRound = useRef(0);
 
-  // Flashing cycle — runs whenever a pick is pending.
+  const snap = mode === "online" && room ? roomToSnapshot(room) : local;
+  const { round, first, turn, locked, scores, log, phase } = snap;
+
+  // Auto-join from a shared link (?room=CODE)
+  useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get("room");
+    if (!code) return;
+    setBusy(true);
+    joinRoom(code)
+      .then((r) => {
+        setRoom(r);
+        setMe(2);
+        setMode("online");
+      })
+      .catch((e: Error) => setLobbyError(e.message))
+      .finally(() => setBusy(false));
+  }, []);
+
+  // Realtime subscription
+  useEffect(() => {
+    if (mode !== "online" || !room) return;
+    const code = room.code;
+    const unsub = subscribeRoom(code, (r) => setRoom(r));
+    const poll = window.setInterval(() => {
+      void fetchRoom(code).then((r) => r && setRoom(r));
+    }, 3000);
+    return () => {
+      unsub();
+      window.clearInterval(poll);
+    };
+  }, [mode, room?.code]);
+
+  // Flashing cycle
   useEffect(() => {
     if (phase !== "playing" || !started) return;
     const id = window.setInterval(() => {
@@ -77,9 +161,35 @@ export function ShowdownGame() {
     return () => window.clearInterval(id);
   }, [phase, started, muted]);
 
+  useEffect(() => () => stopMusic(), []);
+
+  // Sound + copy for the shared (online) state
   useEffect(() => {
-    return () => stopMusic();
-  }, []);
+    if (mode !== "online") return;
+    if (phase === "reveal" && log.length && log.length !== lastLoggedRound.current) {
+      lastLoggedRound.current = log.length;
+      const entry = log[log.length - 1]!;
+      if (entry.winner) {
+        sfxWin();
+        setResultText(
+          `Round ${entry.round}: Player ${entry.winner} takes it — ${LABEL[entry.winner === 1 ? entry.p1 : entry.p2]} beats ${LABEL[entry.winner === 1 ? entry.p2 : entry.p1]}.`,
+        );
+      } else {
+        sfxDraw();
+        setShake(true);
+        window.setTimeout(() => setShake(false), 400);
+        setResultText(`Round ${entry.round}: Standoff — both drew ${LABEL[entry.p1]}.`);
+      }
+    }
+    if (phase === "playing") {
+      setResultText(
+        turn === me
+          ? `Round ${round} — your draw. Hit STOP!`
+          : `Round ${round} — waiting for Player ${turn}…`,
+      );
+    }
+    if (phase === "over") sfxChampion();
+  }, [mode, phase, log.length, turn, me, round]);
 
   const begin = useCallback(() => {
     resumeAudio();
@@ -87,34 +197,44 @@ export function ShowdownGame() {
     setStarted(true);
   }, []);
 
-  const resolveRound = useCallback(
+  // ---------- local (pass-and-play) ----------
+  const resolveLocal = useCallback(
     (p1: Choice, p2: Choice) => {
       const winner: Player | 0 = p1 === p2 ? 0 : beats(p1, p2) ? 1 : 2;
-      setLog((l) => [...l, { round, p1, p2, winner }]);
+      const entry: RoundLog = { round, p1, p2, winner };
+      setLocal((s) => ({
+        ...s,
+        log: [...s.log, entry],
+        scores: winner ? { ...s.scores, [winner]: s.scores[winner] + 1 } : s.scores,
+        phase: "reveal",
+      }));
       if (winner) {
-        setScores((s) => ({ ...s, [winner]: s[winner] + 1 }));
         sfxWin();
-        setResultText(`Round ${round}: Player ${winner} takes it — ${LABEL[winner === 1 ? p1 : p2]} beats ${LABEL[winner === 1 ? p2 : p1]}.`);
+        setResultText(
+          `Round ${round}: Player ${winner} takes it — ${LABEL[winner === 1 ? p1 : p2]} beats ${LABEL[winner === 1 ? p2 : p1]}.`,
+        );
       } else {
         sfxDraw();
         setShake(true);
         window.setTimeout(() => setShake(false), 400);
         setResultText(`Round ${round}: Standoff — both drew ${LABEL[p1]}.`);
       }
-      setPhase("reveal");
 
       const nextFirst: Player = winner ? winner : first;
       window.setTimeout(() => {
         if (round >= TOTAL_ROUNDS) {
-          setPhase("over");
+          setLocal((s) => ({ ...s, phase: "over" }));
           sfxChampion();
           return;
         }
-        setRound((r) => r + 1);
-        setFirst(nextFirst);
-        setTurn(nextFirst);
-        setLocked({});
-        setPhase("playing");
+        setLocal((s) => ({
+          ...s,
+          round: s.round + 1,
+          first: nextFirst,
+          turn: nextFirst,
+          locked: {},
+          phase: "playing",
+        }));
         setResultText(
           `Round ${round + 1} — Player ${nextFirst} draws first${winner ? " (last round's winner)" : ""}. Hit STOP!`,
         );
@@ -123,43 +243,102 @@ export function ShowdownGame() {
     [round, first],
   );
 
+  // ---------- online ----------
+  const resolveOnline = useCallback(
+    async (code: string, p1: Choice, p2: Choice, base: Snapshot) => {
+      const winner: Player | 0 = p1 === p2 ? 0 : beats(p1, p2) ? 1 : 2;
+      const entry: RoundLog = { round: base.round, p1, p2, winner };
+      const nextLog = [...base.log, entry];
+      const score1 = base.scores[1] + (winner === 1 ? 1 : 0);
+      const score2 = base.scores[2] + (winner === 2 ? 1 : 0);
+      await patchRoom(code, {
+        p1_choice: p1,
+        p2_choice: p2,
+        log: nextLog,
+        score1,
+        score2,
+        phase: "reveal",
+      });
+      const nextFirst: Player = winner ? winner : base.first;
+      window.setTimeout(() => {
+        if (base.round >= TOTAL_ROUNDS) {
+          void patchRoom(code, { phase: "over" });
+          return;
+        }
+        void patchRoom(code, {
+          round: base.round + 1,
+          first_player: nextFirst,
+          turn: nextFirst,
+          p1_choice: null,
+          p2_choice: null,
+          phase: "playing",
+        });
+      }, 1700);
+    },
+    [],
+  );
+
   const handleStop = useCallback(
     (player: Player) => {
       if (phase !== "playing" || !started) return;
       if (turn !== player || locked[player]) return;
+      if (mode === "online" && player !== me) return;
       const pick = flash;
       sfxStop();
       const next = { ...locked, [player]: pick };
-      setLocked(next);
       const other: Player = player === 1 ? 2 : 1;
+
+      if (mode === "online" && room) {
+        if (next[other]) {
+          void resolveOnline(room.code, next[1] as Choice, next[2] as Choice, snap);
+        } else {
+          void patchRoom(room.code, {
+            [player === 1 ? "p1_choice" : "p2_choice"]: pick,
+            turn: other,
+          } as Partial<Room>);
+        }
+        return;
+      }
+
+      setLocal((s) => ({ ...s, locked: next }));
       if (next[other]) {
-        resolveRound(next[1] as Choice, next[2] as Choice);
+        resolveLocal(next[1] as Choice, next[2] as Choice);
       } else {
-        setTurn(other);
+        setLocal((s) => ({ ...s, turn: other }));
         setResultText(`Player ${player} is locked in. Player ${other}, your draw!`);
       }
     },
-    [phase, started, turn, locked, flash, resolveRound],
+    [phase, started, turn, locked, flash, mode, me, room, snap, resolveLocal, resolveOnline],
   );
 
-  // Keyboard: A = player 1 stop, L = player 2 stop
+  // Keyboard hotkeys (pass-and-play only)
   useEffect(() => {
+    if (mode !== "local") return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() === "a") handleStop(1);
       if (e.key.toLowerCase() === "l") handleStop(2);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [handleStop]);
+  }, [handleStop, mode]);
 
   const reset = () => {
-    setRound(1);
-    setFirst(1);
-    setTurn(1);
-    setLocked({});
-    setScores({ 1: 0, 2: 0 });
-    setLog([]);
-    setPhase("playing");
+    lastLoggedRound.current = 0;
+    if (mode === "online" && room) {
+      void patchRoom(room.code, {
+        round: 1,
+        first_player: 1,
+        turn: 1,
+        p1_choice: null,
+        p2_choice: null,
+        score1: 0,
+        score2: 0,
+        log: [],
+        phase: "playing",
+      });
+      return;
+    }
+    setLocal(EMPTY);
     setResultText("Round 1 — Player 1 draws first. Hit STOP!");
   };
 
@@ -169,14 +348,62 @@ export function ShowdownGame() {
     setMuted(m);
   };
 
+  const inviteUrl = room
+    ? `${typeof window !== "undefined" ? window.location.origin : "https://scissors-paper-stone.lovable.app"}/?room=${room.code}`
+    : typeof window !== "undefined"
+      ? window.location.href
+      : "https://scissors-paper-stone.lovable.app";
+
   const shareWhatsApp = () => {
-    const url = typeof window !== "undefined" ? window.location.href : "https://scissors-paper-stone.lovable.app";
-    const text = `🤠 Saddle up, partner! Join me in Saloon Showdown — a 7-round Scissors Paper Stone duel. Step through the swinging doors: ${url}`;
+    const text = room
+      ? `🤠 I opened a Saloon Showdown room (code ${room.code}). Tap to duel me — 7 rounds of Scissors Paper Stone, live on your phone: ${inviteUrl}`
+      : `🤠 Saddle up, partner! Join me in Saloon Showdown — a 7-round Scissors Paper Stone duel: ${inviteUrl}`;
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener,noreferrer");
   };
 
-  const champion: Player | 0 =
-    scores[1] === scores[2] ? 0 : scores[1] > scores[2] ? 1 : 2;
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(inviteUrl);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      /* clipboard unavailable */
+    }
+  };
+
+  const host = async () => {
+    setBusy(true);
+    setLobbyError(null);
+    try {
+      const r = await createRoom();
+      setRoom(r);
+      setMe(1);
+      setMode("online");
+    } catch (e) {
+      setLobbyError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const join = async () => {
+    if (joinCode.trim().length < 4) return;
+    setBusy(true);
+    setLobbyError(null);
+    try {
+      const r = await joinRoom(joinCode.trim());
+      setRoom(r);
+      setMe(2);
+      setMode("online");
+    } catch (e) {
+      setLobbyError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const champion: Player | 0 = scores[1] === scores[2] ? 0 : scores[1] > scores[2] ? 1 : 2;
+  const waitingForOpponent = mode === "online" && room ? !room.p2_joined : false;
 
   return (
     <main className="mx-auto w-full max-w-5xl px-4 py-8 sm:py-12">
@@ -192,172 +419,271 @@ export function ShowdownGame() {
         </p>
       </header>
 
-      <div className="panel-wood mt-8 rounded-xl p-4 sm:p-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="text-display text-lg text-primary">
-            Round {Math.min(round, TOTAL_ROUNDS)} / {TOTAL_ROUNDS}
-          </div>
-          <div className="flex gap-1.5">
-            {Array.from({ length: TOTAL_ROUNDS }).map((_, i) => {
-              const entry = log[i];
-              return (
-                <span
-                  key={i}
-                  title={entry ? `Round ${i + 1}` : "Pending"}
-                  className={[
-                    "h-3 w-6 rounded-sm border border-primary/50",
-                    !entry
-                      ? "bg-transparent"
-                      : entry.winner === 1
-                        ? "bg-primary"
-                        : entry.winner === 2
-                          ? "bg-accent"
-                          : "bg-muted-foreground/60",
-                  ].join(" ")}
-                />
-              );
-            })}
-          </div>
-          <div className="flex gap-2">
+      {mode === null ? (
+        <section className="panel-wood mt-8 rounded-xl p-5 sm:p-8">
+          <h2 className="text-display text-center text-xl text-primary">Pick your table</h2>
+
+          <div className="mt-6 grid gap-4 sm:grid-cols-2">
             <button
-              onClick={shareWhatsApp}
-              className="inline-flex items-center gap-2 rounded-md border border-primary/60 px-3 py-1.5 text-xs uppercase tracking-widest text-primary transition-colors hover:bg-primary/15"
-              title="Invite a friend via WhatsApp"
+              onClick={host}
+              disabled={busy}
+              className="rounded-lg border-2 border-primary bg-secondary/60 p-5 text-left transition-transform hover:scale-[1.02] disabled:opacity-60"
             >
-              <WhatsAppIcon className="h-4 w-4" /> Invite
+              <Users className="h-7 w-7 text-primary" />
+              <h3 className="text-display mt-3 text-lg text-primary">Two phones (online)</h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Open a room, send the link on WhatsApp, and duel live from separate phones.
+              </p>
             </button>
+
             <button
-              onClick={toggleMute}
-              className="inline-flex items-center gap-2 rounded-md border border-primary/60 px-3 py-1.5 text-xs uppercase tracking-widest text-primary transition-colors hover:bg-primary/15"
+              onClick={() => setMode("local")}
+              className="rounded-lg border-2 border-border bg-secondary/30 p-5 text-left transition-transform hover:scale-[1.02]"
             >
-              {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-              {muted ? "Muted" : "Music"}
-            </button>
-            <button
-              onClick={reset}
-              className="inline-flex items-center gap-2 rounded-md border border-primary/60 px-3 py-1.5 text-xs uppercase tracking-widest text-primary transition-colors hover:bg-primary/15"
-            >
-              <RotateCcw className="h-4 w-4" /> New match
+              <Smartphone className="h-7 w-7 text-primary" />
+              <h3 className="text-display mt-3 text-lg text-primary">One phone (pass &amp; play)</h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Share a single screen. Hotkeys A and L on a keyboard.
+              </p>
             </button>
           </div>
-        </div>
 
-        <div
-          className={`mt-6 grid gap-4 sm:grid-cols-[1fr_auto_1fr] ${shake ? "animate-shake" : ""}`}
-        >
-          <PlayerPanel
-            player={1}
-            score={scores[1]}
-            locked={locked[1]}
-            flash={flash}
-            active={phase === "playing" && turn === 1 && started}
-            waiting={phase === "playing" && turn !== 1}
-            onStop={() => handleStop(1)}
-            hotkey="A"
-            disabled={!started || phase !== "playing"}
-          />
+          <div className="mt-6 flex flex-col items-center gap-2">
+            <p className="text-xs uppercase tracking-widest text-muted-foreground">
+              Got a room code?
+            </p>
+            <div className="flex gap-2">
+              <input
+                value={joinCode}
+                onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+                placeholder="ABCD"
+                maxLength={4}
+                className="text-display w-28 rounded-md border border-primary/60 bg-background/70 px-3 py-2 text-center text-lg tracking-[0.3em] text-primary outline-none focus:border-primary"
+              />
+              <button
+                onClick={join}
+                disabled={busy}
+                className="text-display rounded-md bg-primary px-5 py-2 text-primary-foreground shadow-brass disabled:opacity-50"
+              >
+                Join
+              </button>
+            </div>
+            {busy && (
+              <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Saddling up…
+              </p>
+            )}
+            {lobbyError && <p className="text-xs text-destructive">{lobbyError}</p>}
+          </div>
+        </section>
+      ) : (
+        <div className="panel-wood mt-8 rounded-xl p-4 sm:p-6">
+          {mode === "online" && room && (
+            <div className="mb-5 rounded-lg border border-primary/50 bg-background/50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-widest text-muted-foreground">
+                    Room code — you are Player {me}
+                  </p>
+                  <p className="text-display gold-text text-3xl tracking-[0.3em]">{room.code}</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={shareWhatsApp}
+                    className="inline-flex items-center gap-2 rounded-md border border-primary/60 px-3 py-2 text-xs uppercase tracking-widest text-primary hover:bg-primary/15"
+                  >
+                    <WhatsAppIcon className="h-4 w-4" /> Send on WhatsApp
+                  </button>
+                  <button
+                    onClick={copyLink}
+                    className="inline-flex items-center gap-2 rounded-md border border-primary/60 px-3 py-2 text-xs uppercase tracking-widest text-primary hover:bg-primary/15"
+                  >
+                    {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                    {copied ? "Copied" : "Copy link"}
+                  </button>
+                </div>
+              </div>
+              {waitingForOpponent && (
+                <p className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Waiting for your partner to walk in…
+                </p>
+              )}
+            </div>
+          )}
 
-          <div className="flex items-center justify-center">
-            <span className="text-display gold-text text-3xl sm:text-4xl">VS</span>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-display text-lg text-primary">
+              Round {Math.min(round, TOTAL_ROUNDS)} / {TOTAL_ROUNDS}
+            </div>
+            <div className="flex gap-1.5">
+              {Array.from({ length: TOTAL_ROUNDS }).map((_, i) => {
+                const entry = log[i];
+                return (
+                  <span
+                    key={i}
+                    title={entry ? `Round ${i + 1}` : "Pending"}
+                    className={[
+                      "h-3 w-6 rounded-sm border border-primary/50",
+                      !entry
+                        ? "bg-transparent"
+                        : entry.winner === 1
+                          ? "bg-primary"
+                          : entry.winner === 2
+                            ? "bg-accent"
+                            : "bg-muted-foreground/60",
+                    ].join(" ")}
+                  />
+                );
+              })}
+            </div>
+            <div className="flex gap-2">
+              {mode === "local" && (
+                <button
+                  onClick={shareWhatsApp}
+                  className="inline-flex items-center gap-2 rounded-md border border-primary/60 px-3 py-1.5 text-xs uppercase tracking-widest text-primary transition-colors hover:bg-primary/15"
+                >
+                  <WhatsAppIcon className="h-4 w-4" /> Invite
+                </button>
+              )}
+              <button
+                onClick={toggleMute}
+                className="inline-flex items-center gap-2 rounded-md border border-primary/60 px-3 py-1.5 text-xs uppercase tracking-widest text-primary transition-colors hover:bg-primary/15"
+              >
+                {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                {muted ? "Muted" : "Music"}
+              </button>
+              <button
+                onClick={reset}
+                className="inline-flex items-center gap-2 rounded-md border border-primary/60 px-3 py-1.5 text-xs uppercase tracking-widest text-primary transition-colors hover:bg-primary/15"
+              >
+                <RotateCcw className="h-4 w-4" /> New match
+              </button>
+            </div>
           </div>
 
-          <PlayerPanel
-            player={2}
-            score={scores[2]}
-            locked={locked[2]}
-            flash={flash}
-            active={phase === "playing" && turn === 2 && started}
-            waiting={phase === "playing" && turn !== 2}
-            onStop={() => handleStop(2)}
-            hotkey="L"
-            disabled={!started || phase !== "playing"}
-          />
-        </div>
+          <div className={`mt-6 grid gap-4 sm:grid-cols-[1fr_auto_1fr] ${shake ? "animate-shake" : ""}`}>
+            <PlayerPanel
+              player={1}
+              mine={mode === "local" || me === 1}
+              score={scores[1]}
+              locked={locked[1]}
+              flash={flash}
+              active={phase === "playing" && turn === 1 && started && !waitingForOpponent}
+              waiting={phase === "playing" && turn !== 1}
+              onStop={() => handleStop(1)}
+              hotkey={mode === "local" ? "A" : null}
+              disabled={
+                !started ||
+                phase !== "playing" ||
+                waitingForOpponent ||
+                (mode === "online" && me !== 1)
+              }
+            />
 
-        <div className="mt-6 rounded-lg border border-primary/40 bg-background/50 px-4 py-3 text-center">
-          <p className="text-sm sm:text-base">{started ? resultText : "Push the swinging doors open to begin."}</p>
-        </div>
+            <div className="flex items-center justify-center">
+              <span className="text-display gold-text text-3xl sm:text-4xl">VS</span>
+            </div>
 
-        {!started && (
-          <div className="mt-4 flex flex-col items-center gap-3">
-            <div className="flex flex-wrap items-center justify-center gap-3">
+            <PlayerPanel
+              player={2}
+              mine={mode === "local" || me === 2}
+              score={scores[2]}
+              locked={locked[2]}
+              flash={flash}
+              active={phase === "playing" && turn === 2 && started && !waitingForOpponent}
+              waiting={phase === "playing" && turn !== 2}
+              onStop={() => handleStop(2)}
+              hotkey={mode === "local" ? "L" : null}
+              disabled={
+                !started ||
+                phase !== "playing" ||
+                waitingForOpponent ||
+                (mode === "online" && me !== 2)
+              }
+            />
+          </div>
+
+          <div className="mt-6 rounded-lg border border-primary/40 bg-background/50 px-4 py-3 text-center">
+            <p className="text-sm sm:text-base">
+              {started ? resultText : "Push the swinging doors open to begin."}
+            </p>
+          </div>
+
+          {!started && (
+            <div className="mt-4 flex flex-col items-center gap-3">
               <button
                 onClick={begin}
                 className="text-display rounded-md bg-primary px-8 py-3 text-lg text-primary-foreground shadow-brass transition-transform hover:scale-105"
               >
                 Enter the Saloon
               </button>
-              <button
-                onClick={shareWhatsApp}
-                className="inline-flex items-center gap-2 rounded-md border border-primary/60 bg-secondary/40 px-5 py-3 text-sm text-primary transition-colors hover:bg-primary/15"
-              >
-                <WhatsAppIcon className="h-5 w-5" /> Invite friend on WhatsApp
-              </button>
+              <p className="max-w-md text-center text-xs text-muted-foreground">
+                Starts the honky-tonk band and the flashing draw.
+              </p>
             </div>
-            <p className="max-w-md text-xs text-muted-foreground">
-              Starts the honky-tonk band and the flashing draw. Share the saloon link so a friend can play on their
-              phone.
-            </p>
-          </div>
-        )}
+          )}
 
-        {phase === "over" && (
-          <div className="animate-swing-in mt-6 rounded-lg border-2 border-primary bg-secondary/60 p-6 text-center">
-            <Trophy className="mx-auto h-10 w-10 text-primary" />
-            <h2 className="text-display gold-text mt-3 text-3xl">
-              {champion ? `Player ${champion} is the Champion!` : "The Match is a Draw"}
-            </h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Final tally — Player 1: {scores[1]} · Player 2: {scores[2]}
-            </p>
-            <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
-              <button
-                onClick={reset}
-                className="text-display rounded-md bg-primary px-6 py-2.5 text-primary-foreground shadow-brass transition-transform hover:scale-105"
-              >
-                Rematch
-              </button>
-              <button
-                onClick={shareWhatsApp}
-                className="inline-flex items-center gap-2 rounded-md border border-primary/60 px-5 py-2.5 text-sm text-primary transition-colors hover:bg-primary/15"
-              >
-                <WhatsAppIcon className="h-5 w-5" /> Challenge a friend
-              </button>
+          {phase === "over" && (
+            <div className="animate-swing-in mt-6 rounded-lg border-2 border-primary bg-secondary/60 p-6 text-center">
+              <Trophy className="mx-auto h-10 w-10 text-primary" />
+              <h2 className="text-display gold-text mt-3 text-3xl">
+                {champion ? `Player ${champion} is the Champion!` : "The Match is a Draw"}
+              </h2>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Final tally — Player 1: {scores[1]} · Player 2: {scores[2]}
+              </p>
+              <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
+                <button
+                  onClick={reset}
+                  className="text-display rounded-md bg-primary px-6 py-2.5 text-primary-foreground shadow-brass transition-transform hover:scale-105"
+                >
+                  Rematch
+                </button>
+                <button
+                  onClick={shareWhatsApp}
+                  className="inline-flex items-center gap-2 rounded-md border border-primary/60 px-5 py-2.5 text-sm text-primary transition-colors hover:bg-primary/15"
+                >
+                  <WhatsAppIcon className="h-5 w-5" /> Challenge a friend
+                </button>
+              </div>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
-      <section className="panel-wood mt-6 rounded-xl p-4 sm:p-6">
-        <h3 className="text-display text-lg text-primary">Tally Board</h3>
-        {log.length === 0 ? (
-          <p className="mt-2 text-sm text-muted-foreground">No rounds played yet.</p>
-        ) : (
-          <ul className="mt-3 space-y-1.5 text-sm">
-            {log.map((l) => (
-              <li key={l.round} className="flex items-center justify-between border-b border-border/60 pb-1.5">
-                <span className="text-muted-foreground">Round {l.round}</span>
-                <span>
-                  {LABEL[l.p1]} vs {LABEL[l.p2]}
-                </span>
-                <span className={l.winner === 0 ? "text-muted-foreground" : "text-primary"}>
-                  {l.winner === 0 ? "Standoff" : `Player ${l.winner}`}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-        <p className="mt-4 text-xs text-muted-foreground">
-          House rules: choices flash nonstop. Player 1 stops first in round one; after that the previous
-          round&apos;s winner stops first. Hotkeys — A for Player 1, L for Player 2.
-        </p>
-      </section>
+      {mode !== null && (
+        <section className="panel-wood mt-6 rounded-xl p-4 sm:p-6">
+          <h3 className="text-display text-lg text-primary">Tally Board</h3>
+          {log.length === 0 ? (
+            <p className="mt-2 text-sm text-muted-foreground">No rounds played yet.</p>
+          ) : (
+            <ul className="mt-3 space-y-1.5 text-sm">
+              {log.map((l) => (
+                <li key={l.round} className="flex items-center justify-between border-b border-border/60 pb-1.5">
+                  <span className="text-muted-foreground">Round {l.round}</span>
+                  <span>
+                    {LABEL[l.p1]} vs {LABEL[l.p2]}
+                  </span>
+                  <span className={l.winner === 0 ? "text-muted-foreground" : "text-primary"}>
+                    {l.winner === 0 ? "Standoff" : `Player ${l.winner}`}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-4 text-xs text-muted-foreground">
+            House rules: choices flash nonstop. Player 1 stops first in round one; after that the previous
+            round&apos;s winner stops first.
+          </p>
+        </section>
+      )}
     </main>
   );
 }
 
 function PlayerPanel({
   player,
+  mine,
   score,
   locked,
   flash,
@@ -368,13 +694,14 @@ function PlayerPanel({
   disabled,
 }: {
   player: Player;
+  mine: boolean;
   score: number;
   locked?: Choice | undefined;
   flash: Choice;
   active: boolean;
   waiting: boolean;
   onStop: () => void;
-  hotkey: string;
+  hotkey: string | null;
   disabled: boolean;
 }) {
   const shown = locked ?? flash;
@@ -388,6 +715,7 @@ function PlayerPanel({
       <div className="flex items-center justify-between">
         <span className="text-display text-sm uppercase tracking-widest text-primary">
           Player {player}
+          {mine ? " (you)" : ""}
         </span>
         <span className="text-display text-2xl gold-text">{score}</span>
       </div>
@@ -414,7 +742,9 @@ function PlayerPanel({
       >
         Stop
       </button>
-      <p className="mt-1.5 text-[11px] uppercase tracking-widest text-muted-foreground">Key: {hotkey}</p>
+      {hotkey && (
+        <p className="mt-1.5 text-[11px] uppercase tracking-widest text-muted-foreground">Key: {hotkey}</p>
+      )}
     </div>
   );
 }

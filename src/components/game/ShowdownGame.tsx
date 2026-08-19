@@ -384,6 +384,7 @@ export function ShowdownGame() {
   };
 
   const host = async () => {
+    notifiedJoin.current = false;
     setBusy(true);
     setLobbyError(null);
     try {

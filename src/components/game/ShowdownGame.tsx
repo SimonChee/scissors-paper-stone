@@ -310,12 +310,20 @@ export function ShowdownGame() {
             <p className="mt-2 text-sm text-muted-foreground">
               Final tally — Player 1: {scores[1]} · Player 2: {scores[2]}
             </p>
-            <button
-              onClick={reset}
-              className="text-display mt-5 rounded-md bg-primary px-6 py-2.5 text-primary-foreground shadow-brass transition-transform hover:scale-105"
-            >
-              Rematch
-            </button>
+            <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
+              <button
+                onClick={reset}
+                className="text-display rounded-md bg-primary px-6 py-2.5 text-primary-foreground shadow-brass transition-transform hover:scale-105"
+              >
+                Rematch
+              </button>
+              <button
+                onClick={shareWhatsApp}
+                className="inline-flex items-center gap-2 rounded-md border border-primary/60 px-5 py-2.5 text-sm text-primary transition-colors hover:bg-primary/15"
+              >
+                <WhatsAppIcon className="h-5 w-5" /> Challenge a friend
+              </button>
+            </div>
           </div>
         )}
       </div>

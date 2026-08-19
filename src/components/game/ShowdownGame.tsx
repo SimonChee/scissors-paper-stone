@@ -37,6 +37,7 @@ import {
   type Room,
   type RoundLog,
 } from "@/lib/online-room";
+import { notifyOpponentJoined } from "@/lib/telegram.functions";
 
 const CHOICES: Choice[] = ["scissors", "paper", "stone"];
 const TOTAL_ROUNDS = 7;
@@ -117,6 +118,7 @@ export function ShowdownGame() {
 
   const flashIndex = useRef(0);
   const lastLoggedRound = useRef(0);
+  const notifiedJoin = useRef(false);
 
   const snap = mode === "online" && room ? roomToSnapshot(room) : local;
   const { round, first, turn, locked, scores, log, phase } = snap;
@@ -162,6 +164,16 @@ export function ShowdownGame() {
   }, [phase, started, muted]);
 
   useEffect(() => () => stopMusic(), []);
+
+  // Telegram ping when the opponent walks in (host only, once per room)
+  useEffect(() => {
+    if (mode !== "online" || me !== 1 || !room?.p2_joined) return;
+    if (notifiedJoin.current) return;
+    notifiedJoin.current = true;
+    void notifyOpponentJoined({ data: { code: room.code } }).catch(() => {
+      /* notification is best-effort */
+    });
+  }, [mode, me, room?.p2_joined, room?.code]);
 
   // Sound + copy for the shared (online) state
   useEffect(() => {
@@ -372,6 +384,7 @@ export function ShowdownGame() {
   };
 
   const host = async () => {
+    notifiedJoin.current = false;
     setBusy(true);
     setLobbyError(null);
     try {

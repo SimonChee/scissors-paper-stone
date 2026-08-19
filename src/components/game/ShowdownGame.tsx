@@ -279,14 +279,25 @@ export function ShowdownGame() {
         </div>
 
         {!started && (
-          <div className="mt-4 text-center">
-            <button
-              onClick={begin}
-              className="text-display rounded-md bg-primary px-8 py-3 text-lg text-primary-foreground shadow-brass transition-transform hover:scale-105"
-            >
-              Enter the Saloon
-            </button>
-            <p className="mt-2 text-xs text-muted-foreground">Starts the honky-tonk band and the flashing draw.</p>
+          <div className="mt-4 flex flex-col items-center gap-3">
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <button
+                onClick={begin}
+                className="text-display rounded-md bg-primary px-8 py-3 text-lg text-primary-foreground shadow-brass transition-transform hover:scale-105"
+              >
+                Enter the Saloon
+              </button>
+              <button
+                onClick={shareWhatsApp}
+                className="inline-flex items-center gap-2 rounded-md border border-primary/60 bg-secondary/40 px-5 py-3 text-sm text-primary transition-colors hover:bg-primary/15"
+              >
+                <WhatsAppIcon className="h-5 w-5" /> Invite friend on WhatsApp
+              </button>
+            </div>
+            <p className="max-w-md text-xs text-muted-foreground">
+              Starts the honky-tonk band and the flashing draw. Share the saloon link so a friend can play on their
+              phone.
+            </p>
           </div>
         )}
 

@@ -329,7 +329,7 @@ function PlayerPanel({
 }: {
   player: Player;
   score: number;
-  locked?: Choice;
+  locked?: Choice | undefined;
   flash: Choice;
   active: boolean;
   waiting: boolean;

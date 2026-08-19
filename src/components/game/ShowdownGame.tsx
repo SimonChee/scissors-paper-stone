@@ -220,6 +220,13 @@ export function ShowdownGame() {
           </div>
           <div className="flex gap-2">
             <button
+              onClick={shareWhatsApp}
+              className="inline-flex items-center gap-2 rounded-md border border-primary/60 px-3 py-1.5 text-xs uppercase tracking-widest text-primary transition-colors hover:bg-primary/15"
+              title="Invite a friend via WhatsApp"
+            >
+              <WhatsAppIcon className="h-4 w-4" /> Invite
+            </button>
+            <button
               onClick={toggleMute}
               className="inline-flex items-center gap-2 rounded-md border border-primary/60 px-3 py-1.5 text-xs uppercase tracking-widest text-primary transition-colors hover:bg-primary/15"
             >

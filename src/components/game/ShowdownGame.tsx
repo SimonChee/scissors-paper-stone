@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Scissors, Hand, Mountain, Volume2, VolumeX, RotateCcw, Trophy } from "lucide-react";
+import { Scissors, Hand, Mountain, Volume2, VolumeX, RotateCcw, Trophy, Share2 } from "lucide-react";
 
 import {
   resumeAudio,

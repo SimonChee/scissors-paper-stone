@@ -51,11 +51,11 @@ function pianoNote(freq: number, time: number, dur: number, gain = 0.5) {
   pluck(freq * 2, time, dur * 0.5, gain * 0.15, "sine");
 }
 
-const N: Record<string, number> = {
+const N = {
   C2: 65.41, G2: 98.0, C3: 130.81, D3: 146.83, E3: 164.81, F3: 174.61,
   G3: 196.0, A3: 220.0, B3: 246.94, C4: 261.63, D4: 293.66, E4: 329.63,
   F4: 349.23, G4: 392.0, A4: 440.0, C5: 523.25,
-};
+} as const;
 
 // 16-step ragtime-ish vamp in C
 const BASS = [N.C2, 0, N.G2, 0, N.C2, 0, N.G2, 0, N.F3 / 2, 0, N.C3, 0, N.G2, 0, N.G2, 0];
@@ -69,9 +69,9 @@ const STEP_DUR = 0.16;
 function scheduler() {
   const c = ac();
   while (nextNoteTime < c.currentTime + 0.25) {
-    const b = BASS[step % 16];
+    const b = BASS[step % 16] ?? 0;
     if (b) pianoNote(b, nextNoteTime, 0.28, 0.55);
-    const m = MEL[step % 16];
+    const m = MEL[step % 16] ?? 0;
     if (m) pianoNote(m, nextNoteTime, 0.22, 0.32);
     if (step % 4 === 2) {
       // brushed snare/clap

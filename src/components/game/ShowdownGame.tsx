@@ -117,6 +117,7 @@ export function ShowdownGame() {
 
   const flashIndex = useRef(0);
   const lastLoggedRound = useRef(0);
+  const notifiedJoin = useRef(false);
 
   const snap = mode === "online" && room ? roomToSnapshot(room) : local;
   const { round, first, turn, locked, scores, log, phase } = snap;

@@ -169,6 +169,12 @@ export function ShowdownGame() {
     setMuted(m);
   };
 
+  const shareWhatsApp = () => {
+    const url = typeof window !== "undefined" ? window.location.href : "https://scissors-paper-stone.lovable.app";
+    const text = `🤠 Saddle up, partner! Join me in Saloon Showdown — a 7-round Scissors Paper Stone duel. Step through the swinging doors: ${url}`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener,noreferrer");
+  };
+
   const champion: Player | 0 =
     scores[1] === scores[2] ? 0 : scores[1] > scores[2] ? 1 : 2;
 

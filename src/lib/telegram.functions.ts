@@ -13,7 +13,7 @@ export const notifyOpponentJoined = createServerFn({ method: "POST" })
     const telegramKey = process.env["TELEGRAM_API_KEY"];
     const chatId = process.env["TELEGRAM_CHAT_ID"];
     if (!lovableKey || !telegramKey || !chatId) {
-      return { sent: false, reason: "Telegram is not configured" };
+      return { sent: false, reason: "Telegram is not configured" as string | null };
     }
 
     const response = await fetch("https://connector-gateway.lovable.dev/telegram/sendMessage", {
@@ -33,14 +33,14 @@ export const notifyOpponentJoined = createServerFn({ method: "POST" })
     if (!response.ok) {
       const errorBody = await response.text();
       console.error(`Telegram gateway failed [${response.status}]: ${errorBody}`);
-      throw new Error(`Telegram request failed [${response.status}]: ${errorBody}`);
+      return { sent: false, reason: `Telegram request failed [${response.status}]: ${errorBody}` };
     }
 
     const payload = (await response.json()) as { ok?: boolean; description?: string };
     if (!payload.ok) {
       console.error(`Telegram error: ${payload.description ?? "unknown"}`);
-      throw new Error(`Telegram error: ${payload.description ?? "unknown"}`);
+      return { sent: false, reason: payload.description ?? "unknown" };
     }
 
-    return { sent: true };
+    return { sent: true, reason: null };
   });

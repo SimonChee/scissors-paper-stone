@@ -14,7 +14,54 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      game_rooms: {
+        Row: {
+          code: string
+          created_at: string
+          first_player: number
+          log: Json
+          p1_choice: string | null
+          p2_choice: string | null
+          p2_joined: boolean
+          phase: string
+          round: number
+          score1: number
+          score2: number
+          turn: number
+          updated_at: string
+        }
+        Insert: {
+          code: string
+          created_at?: string
+          first_player?: number
+          log?: Json
+          p1_choice?: string | null
+          p2_choice?: string | null
+          p2_joined?: boolean
+          phase?: string
+          round?: number
+          score1?: number
+          score2?: number
+          turn?: number
+          updated_at?: string
+        }
+        Update: {
+          code?: string
+          created_at?: string
+          first_player?: number
+          log?: Json
+          p1_choice?: string | null
+          p2_choice?: string | null
+          p2_joined?: boolean
+          phase?: string
+          round?: number
+          score1?: number
+          score2?: number
+          turn?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
